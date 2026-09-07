@@ -1,0 +1,16 @@
+# Build output — regenerate with ./scripts/build.sh
+build/
+
+# Credentials and signing material must never be committed.
+*.pem
+*.p12
+*.key
+*.cer
+*.mobileprovision
+.env
+.env.*
+
+# Internal working notes, not part of the published project.
+OUTPUT.md
+
+.DS_Store
