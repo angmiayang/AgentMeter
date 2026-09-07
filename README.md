@@ -131,3 +131,8 @@ scripts/build.sh      compile, bundle, ad-hoc sign, optionally install
 
 Ad-hoc signing is all this app needs: it holds no system permission that a
 re-sign would invalidate, so there is no certificate to set up.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Use it, change it, ship it; keep the copyright
+notice.
