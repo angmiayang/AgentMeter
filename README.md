@@ -1,7 +1,9 @@
 # AgentMeter
 
-A macOS menu-bar app showing how much of your Claude and ChatGPT rate limits you
-have burned, and when each window resets. One glance instead of opening two apps.
+*Rate-limit meter for Claude and ChatGPT, in the macOS menu bar.*
+
+How much of your Claude and ChatGPT rate limits you have burned, and when each
+window resets — one glance instead of opening two apps.
 
 The menu-bar dial opens a panel with one gauge per rate-limit window, each with
 its percentage, a severity colour and the time it resets.
@@ -65,6 +67,35 @@ wrote, so no request leaves the machine. The Claude call hits an account usage
 endpoint that reports numbers rather than generating text, so no model is
 invoked. It is the same call the Claude Code client makes to fill its own cache.
 
+## Keeping the Claude gauge alive
+
+Claude Code's access token lapses within hours, and it is only renewed when the
+**CLI** makes a request — so if you work in the Claude desktop app, that token
+goes stale and the gauge greys out with `Sign-In Expired`. Your login is fine;
+only the short-lived half has died.
+
+For a gauge that stays live, provision a long-lived token once:
+
+```bash
+claude setup-token
+```
+
+Then store what it prints in a keychain item named `AgentMeter`:
+
+```bash
+security add-generic-password -s AgentMeter -a "$(id -un)" -w 'PASTE_TOKEN_HERE' -U
+```
+
+AgentMeter reads that item first and falls back to Claude Code's credential when
+it is absent, so this is entirely optional. Remove it at any time:
+
+```bash
+security delete-generic-password -s AgentMeter
+```
+
+`./uninstall.sh` removes it too. Treat the token like a password: it grants API
+access to your account for as long as it remains valid.
+
 ## Security
 
 This app reads credential-adjacent data, so here is its complete footprint.
@@ -75,15 +106,18 @@ This app reads credential-adjacent data, so here is its complete footprint.
 - **One outbound request:** `GET https://api.anthropic.com/api/oauth/usage`. No
   other host is contacted, ever.
 - **One subprocess:** `/usr/bin/security find-generic-password`, to read the
-  existing `Claude Code-credentials` keychain item. Read-only, fixed arguments,
-  no shell, so nothing is interpolated into a command line.
+  optional `AgentMeter` item and, failing that, the existing
+  `Claude Code-credentials` item. Read-only, fixed arguments, no shell, so
+  nothing is interpolated into a command line. It never *writes* to the
+  keychain.
 - **No dynamic code.** No `eval`, no `dlopen`, no downloaded or generated code,
   and nothing piped from `curl` in the build or install path.
 - **Read-only on your data.** Never writes, moves or deletes anything under
   `~/.claude` or `~/.codex`, and never writes to the keychain.
-- **No secret is stored.** The access token is read at the moment of a check,
-  sent only to Anthropic in the `Authorization` header, and discarded. It is
-  never logged or written to disk. `~/.codex/auth.json` is never opened.
+- **No secret is stored by the app.** Whichever token is in play is read at the
+  moment of a check, sent only to Anthropic in the `Authorization` header, and
+  discarded. It is never logged or written to disk. `~/.codex/auth.json` is
+  never opened.
 
 Everything runs as you, on your machine, against your own accounts.
 
@@ -99,12 +133,12 @@ to delete.
 
 ## Caveats
 
-**Token refresh belongs to Claude Code.** If the access token has lapsed,
-AgentMeter shows `Sign-In Expired · Run: claude auth login` rather than doing a
-refresh grant against a credential another app owns. Note that `claude auth
-status` can report `loggedIn: true` while the *access* token is expired — the
-CLI holds a valid refresh token and only exchanges it when it makes a real
-request.
+**Claude sign-in lapses within hours unless you provision a token.** See
+"Keeping the Claude gauge alive" above. AgentMeter will not refresh Claude
+Code's credential itself: if Anthropic rotates refresh tokens on exchange,
+doing so would either discard the replacement and log you out of Claude Code,
+or race Claude Code for the same keychain entry. Neither is worth it for a
+status widget.
 
 **A dead window shows no number.** A percentage only describes the window it was
 measured in. Once the reset time has passed, that window has rolled over and the

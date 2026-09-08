@@ -261,26 +261,54 @@ enum CodexSource {
 // MARK: - Claude
 
 enum ClaudeSource {
+    /// Keychain service holding an optional long-lived token, provisioned by the
+    /// user with `claude setup-token`. Entirely opt-in: if the item is absent we
+    /// fall back to Claude Code's own credential.
+    static let tokenService = "AgentMeter"
+
     struct Creds {
         let token: String
-        let expiresAt: Date?
+        let expiresAt: Date?          // nil for a long-lived token: nothing to check
         let subscription: String?
+        let longLived: Bool
         var expired: Bool { (expiresAt.map { $0 <= Date() }) ?? false }
     }
 
-    /// Pull the OAuth credential out of the login Keychain. Nothing is stored:
-    /// this runs at the moment of the call and the value is discarded after.
-    private static func creds() -> Creds? {
+    /// Read one generic-password item. Read-only, fixed argv, no shell, so
+    /// nothing is interpolated into a command line. The value is returned to the
+    /// caller and never stored.
+    private static func keychain(_ service: String) -> Data? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        p.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+        p.arguments = ["find-generic-password", "-s", service, "-w"]
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        guard p.terminationStatus == 0,
+        guard p.terminationStatus == 0, !data.isEmpty else { return nil }
+        return data
+    }
+
+    /// Prefer the user's long-lived token; otherwise use Claude Code's short-lived
+    /// one. Nothing is stored either way: this runs at the moment of the call and
+    /// the value is discarded after.
+    private static func creds() -> Creds? {
+        // 1. An optional token the user provisioned for AgentMeter. Stored as raw
+        //    text, so it survives whatever shape `claude setup-token` prints.
+        if let d = keychain(tokenService),
+           let raw = String(data: d, encoding: .utf8) {
+            let tok = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tok.isEmpty, !tok.contains("\n") {
+                return Creds(token: tok, expiresAt: nil, subscription: nil,
+                             longLived: true)
+            }
+        }
+
+        // 2. Claude Code's credential, which lapses within hours of a login and is
+        //    only renewed when the CLI itself makes a request.
+        guard let data = keychain("Claude Code-credentials"),
               let root = obj(try? JSONSerialization.jsonObject(with: data)),
               let oauth = obj(root["claudeAiOauth"]),
               let tok = oauth["accessToken"] as? String, !tok.isEmpty
@@ -288,7 +316,8 @@ enum ClaudeSource {
         // expiresAt is milliseconds since the epoch.
         let exp = num(oauth["expiresAt"]).map { Date(timeIntervalSince1970: $0 / 1000) }
         return Creds(token: tok, expiresAt: exp,
-                     subscription: oauth["subscriptionType"] as? String)
+                     subscription: oauth["subscriptionType"] as? String,
+                     longLived: false)
     }
 
     private static func planLabel(_ c: Creds? = nil) -> String? {
@@ -389,7 +418,7 @@ enum ClaudeSource {
         if c.expired {
             var r = cached()
             r.plan = planLabel(c)
-            r.problem = "Sign-In Expired · Run: claude auth login"
+            r.problem = "Sign-In Expired · Run: claude setup-token"
             done(r); return
         }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
@@ -410,8 +439,10 @@ enum ClaudeSource {
                 // the failure visible so a broken endpoint is never silent.
                 var r = cached()
                 r.plan = planLabel(c)
-                r.problem = code == 401 ? "Sign-In Expired · Run: claude auth login"
-                                        : "Fetch Failed (\(code))"
+                r.problem = code == 401
+                ? (c.longLived ? "Token Rejected · Re-run claude setup-token"
+                               : "Sign-In Expired · Run: claude setup-token")
+                : "Fetch Failed (\(code))"
                 DispatchQueue.main.async { done(r) }
                 return
             }

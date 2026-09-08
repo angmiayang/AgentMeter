@@ -39,6 +39,14 @@ if [ -d build ]; then
   echo "  removed build output"
 fi
 
+# The optional long-lived token, if one was provisioned. It is scoped to this app
+# and useless without it, so leaving a live credential behind would be worse than
+# removing it.
+if security find-generic-password -s "AgentMeter" >/dev/null 2>&1; then
+  security delete-generic-password -s "AgentMeter" >/dev/null 2>&1 \
+    && echo "  removed the AgentMeter keychain token"
+fi
+
 echo
 echo "Done."
 
@@ -50,9 +58,9 @@ Two things deliberately left alone:
   ~/.claude and ~/.codex; it created and modified nothing there, so there
   is nothing to clean up.
 
-  Your keychain. AgentMeter stored no credential of its own. It read the
-  existing "Claude Code-credentials" item at the moment of each check and
-  kept nothing, so it has no entry to delete.
+  Claude Code's own keychain item. AgentMeter only ever read
+  "Claude Code-credentials"; that entry belongs to Claude Code and is left
+  exactly as it was.
 
 If "AgentMeter" still appears under System Settings > General > Login Items,
 remove it there. That list is owned by macOS, not by this script.
