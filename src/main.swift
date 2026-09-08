@@ -261,16 +261,10 @@ enum CodexSource {
 // MARK: - Claude
 
 enum ClaudeSource {
-    /// Keychain service holding an optional long-lived token, provisioned by the
-    /// user with `claude setup-token`. Entirely opt-in: if the item is absent we
-    /// fall back to Claude Code's own credential.
-    static let tokenService = "AgentMeter"
-
     struct Creds {
         let token: String
-        let expiresAt: Date?          // nil for a long-lived token: nothing to check
+        let expiresAt: Date?
         let subscription: String?
-        let longLived: Bool
         var expired: Bool { (expiresAt.map { $0 <= Date() }) ?? false }
     }
 
@@ -291,23 +285,16 @@ enum ClaudeSource {
         return data
     }
 
-    /// Prefer the user's long-lived token; otherwise use Claude Code's short-lived
-    /// one. Nothing is stored either way: this runs at the moment of the call and
-    /// the value is discarded after.
+    /// Claude Code's credential. It lapses within hours of a login and is only
+    /// renewed when the CLI itself makes a request.
+    ///
+    /// A long-lived token from `claude setup-token` cannot substitute: it is
+    /// scoped for inference only, and /api/oauth/usage answers such a token with
+    /// "does not meet scope requirement user:profile". Verified, not assumed.
+    ///
+    /// Nothing is stored: this runs at the moment of the call and the value is
+    /// discarded after.
     private static func creds() -> Creds? {
-        // 1. An optional token the user provisioned for AgentMeter. Stored as raw
-        //    text, so it survives whatever shape `claude setup-token` prints.
-        if let d = keychain(tokenService),
-           let raw = String(data: d, encoding: .utf8) {
-            let tok = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tok.isEmpty, !tok.contains("\n") {
-                return Creds(token: tok, expiresAt: nil, subscription: nil,
-                             longLived: true)
-            }
-        }
-
-        // 2. Claude Code's credential, which lapses within hours of a login and is
-        //    only renewed when the CLI itself makes a request.
         guard let data = keychain("Claude Code-credentials"),
               let root = obj(try? JSONSerialization.jsonObject(with: data)),
               let oauth = obj(root["claudeAiOauth"]),
@@ -316,8 +303,7 @@ enum ClaudeSource {
         // expiresAt is milliseconds since the epoch.
         let exp = num(oauth["expiresAt"]).map { Date(timeIntervalSince1970: $0 / 1000) }
         return Creds(token: tok, expiresAt: exp,
-                     subscription: oauth["subscriptionType"] as? String,
-                     longLived: false)
+                     subscription: oauth["subscriptionType"] as? String)
     }
 
     private static func planLabel(_ c: Creds? = nil) -> String? {
@@ -418,7 +404,7 @@ enum ClaudeSource {
         if c.expired {
             var r = cached()
             r.plan = planLabel(c)
-            r.problem = "Sign-In Expired · Run: claude setup-token"
+            r.problem = "Sign-In Stale · Run: claude, then /usage"
             done(r); return
         }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
@@ -439,10 +425,9 @@ enum ClaudeSource {
                 // the failure visible so a broken endpoint is never silent.
                 var r = cached()
                 r.plan = planLabel(c)
-                r.problem = code == 401
-                ? (c.longLived ? "Token Rejected · Re-run claude setup-token"
-                               : "Sign-In Expired · Run: claude setup-token")
-                : "Fetch Failed (\(code))"
+                r.problem = code == 401 ? "Sign-In Rejected · Run: claude auth login"
+                     : code == 403 ? "Token Lacks Usage Scope"
+                     : "Fetch Failed (\(code))"
                 DispatchQueue.main.async { done(r) }
                 return
             }

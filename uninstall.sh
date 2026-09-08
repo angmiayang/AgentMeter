@@ -39,13 +39,6 @@ if [ -d build ]; then
   echo "  removed build output"
 fi
 
-# The optional long-lived token, if one was provisioned. It is scoped to this app
-# and useless without it, so leaving a live credential behind would be worse than
-# removing it.
-if security find-generic-password -s "AgentMeter" >/dev/null 2>&1; then
-  security delete-generic-password -s "AgentMeter" >/dev/null 2>&1 \
-    && echo "  removed the AgentMeter keychain token"
-fi
 
 echo
 echo "Done."
